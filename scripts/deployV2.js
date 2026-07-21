@@ -27,7 +27,7 @@ async function main() {
   console.log("  ✅ BrokexVault v2 déployé à :", vaultAddress);
 
   // 3. TEE Enclave Signer Address
-  const teeSignerAddress = "0xFb8A8f2FDfEc07Ab74DE429aC041F70fC9B48c03";
+  const teeSignerAddress = "0xf8429f008bA010d7e75eF38176A3e35d11e0F835";
   const teeExtensionRegistry = "0x44A446BF66Af52a4235b5b4AF4D7BDB92Dd749fd";
   const teeMachineRegistry = "0xCeCb92824dc00b2178a4b8E33acEAB1e80dbE40B";
 

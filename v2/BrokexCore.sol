@@ -127,16 +127,18 @@ contract BrokexCore {
         uint256 avgEntryPriceShort;
     }
 
-    // Risk proof signed off-chain by AWS KMS.
-    // Spread is the SOLE source of spread — no on-chain baseSpread.
-    // Signature covers ALL six fields: assetId, maxOILong, maxOIShort, spreadLong, spreadShort, timestamp.
-    struct RiskProof {
+    /**
+     * @dev Flare Confidential Compute (FCC) TEE Risk Proof
+     * Signed off-chain inside the secure TEE Enclave memory (`extension-tee`).
+     * Signature covers: assetId, maxOILong, maxOIShort, spreadLong, spreadShort, timestamp.
+     */
+    struct TeeRiskProof {
         uint256 assetId;
         uint256 maxOILong;    // max allowed global long OI after this trade opens
         uint256 maxOIShort;   // max allowed global short OI after this trade opens
         uint256 spreadLong;   // spread when trader BUYS  (≤ MAX_SPREAD_ALLOWED)
         uint256 spreadShort;  // spread when trader SELLS (≤ MAX_SPREAD_ALLOWED)
-        uint256 timestamp;    // unix timestamp — proof signed at this time
+        uint256 timestamp;    // unix timestamp — proof signed at this time inside TEE enclave
         bytes   sig;          // ECDSA over keccak256(abi.encode(assetId,maxOILong,maxOIShort,spreadLong,spreadShort,timestamp))
     }
 
@@ -157,22 +159,23 @@ contract BrokexCore {
     // Storage
     // =========================================================
 
-    IBrokexVault public immutable vault;
-    IERC20       public immutable USDT;
-    address      public owner;
-    address      public pendingOwner;
-    bool         private locked;
+    address public owner;
+    address public pendingOwner;
+    bool    private locked;
+
+    IERC20           public immutable USDT;
+    IBrokexVault     public immutable vault;
 
     // Official Flare Confidential Compute (FCC) TEE Enclave Signer & Registries
-    address      public kmsSigner; // TEE Enclave Signer Address
+    address      public teeEnclaveSigner; // TEE Enclave Signer Address (isolated in TEE memory)
     uint256      public teeExtensionId;
     ITeeExtensionRegistry public teeExtensionRegistry;
     ITeeMachineRegistry   public teeMachineRegistry;
 
     mapping(uint256 => AssetConfig) public assets;
 
-    bool         public paused;
-    bool         public emergencyMode;
+    bool public paused;
+    bool public emergencyMode;
 
     mapping(uint256 => AssetExposure) public exposures;
     uint256 public totalLockedCapital;
@@ -192,7 +195,7 @@ contract BrokexCore {
     event OwnershipTransferStarted(address indexed old, address indexed pending);
     event OwnershipTransferred(address indexed old, address indexed next);
     event ConfigUpdated();
-    event KmsSignerUpdated(address indexed signer);
+    event TeeSignerUpdated(address indexed signer);
     event TradingPaused();
     event TradingUnpaused();
     event EmergencyEnabled();
@@ -222,8 +225,8 @@ contract BrokexCore {
     error InsufficientVaultCapital();
     error StalePrice();
     error PairNotInProof();
-    error InvalidKmsProof();
-    error KmsProofExpired();
+    error InvalidTeeProof();
+    error TeeProofExpired();
     error SpreadExceedsMaxAllowed();
     error TransferFailed();
     error InsufficientFreeLiquidityForWithdrawals();
@@ -265,7 +268,7 @@ contract BrokexCore {
         owner              = msg.sender;
         vault              = IBrokexVault(vaultAddress);
         USDT               = IERC20(IBrokexVault(vaultAddress).USDT());
-        kmsSigner          = teeSignerAddress; // Flare TEE Enclave Signer Key
+        teeEnclaveSigner   = teeSignerAddress; // Flare TEE Enclave Signer Key
         
         if (_teeExtensionRegistry != address(0)) {
             teeExtensionRegistry = ITeeExtensionRegistry(_teeExtensionRegistry);
@@ -361,40 +364,33 @@ contract BrokexCore {
         emit AssetDelisted(assetId);
     }
 
-    function setKmsSigner(address newSigner) external onlyOwner {
+    function setTeeSigner(address newSigner) external onlyOwner {
         if (newSigner == address(0)) revert ZeroAddress();
-        kmsSigner = newSigner;
-        emit KmsSignerUpdated(newSigner);
+        teeEnclaveSigner = newSigner;
+        emit TeeSignerUpdated(newSigner);
     }
 
-    /// @notice Configure Flare Confidential Compute (FCC) TEE Enclave Signer & Registries
+    /**
+     * @notice Configure Flare Confidential Compute (FCC) TEE Enclave Signer & Registries
+     * 
+     * NEXT IMPLEMENTATION STEPS (When Flare releases Coston2 ExtensionGovernance update):
+     * 1. Register extension on Coston2 TeeExtensionRegistry to obtain extensionId.
+     * 2. Call setTeeExtensionConfig(extensionId, enclaveSignerAddress, teeExtensionRegistry, teeMachineRegistry).
+     * 3. Enable direct on-chain machine attestation verification.
+     */
     function setTeeExtensionConfig(
         uint256 _extensionId,
         address _enclaveSigner,
         address _teeExtensionRegistry,
         address _teeMachineRegistry
     ) external onlyOwner {
-        if (_enclaveSigner == address(0)) revert ZeroAddress();
-
-        kmsSigner = _enclaveSigner;
+        if (_enclaveSigner != address(0)) teeEnclaveSigner = _enclaveSigner;
         teeExtensionId = _extensionId;
-        
-        if (_teeExtensionRegistry != address(0)) {
-            teeExtensionRegistry = ITeeExtensionRegistry(_teeExtensionRegistry);
-            // Actively query official Flare TEE Extension Registry on-chain
-            try teeExtensionRegistry.getTeeExtensionInstructionsSender(_extensionId) returns (address sender) {
-                if (sender != address(0)) {
-                    // Validated extension instruction sender on-chain
-                }
-            } catch {}
-        }
-        
-        if (_teeMachineRegistry != address(0)) {
-            teeMachineRegistry = ITeeMachineRegistry(_teeMachineRegistry);
-        }
-
+        if (_teeExtensionRegistry != address(0)) teeExtensionRegistry = ITeeExtensionRegistry(_teeExtensionRegistry);
+        if (_teeMachineRegistry != address(0)) teeMachineRegistry = ITeeMachineRegistry(_teeMachineRegistry);
         emit ConfigUpdated();
     }
+
 
     function pause() external onlyOwner {
         if (paused) revert ProtocolPaused();
@@ -433,16 +429,15 @@ contract BrokexCore {
         uint256 leverage,
         uint256 slPrice,
         uint256 tpPrice,
-        RiskProof calldata riskProof
+        TeeRiskProof calldata riskProof
     ) external nonReentrant notPaused returns (uint256 tradeId) {
         AssetConfig storage cfg = assets[assetId];
         if (!cfg.listed) revert BadParameter();
         if (cfg.frozen) revert BadParameter();
-        if (riskProof.assetId != assetId) revert BadParameter();
 
         if (direction != DIR_LONG && direction != DIR_SHORT) revert BadDirection();
 
-        _verifyKmsProof(riskProof);
+        _verifyTeeProof(riskProof);
         _validateSpreadCap(riskProof.spreadLong, riskProof.spreadShort);
 
         (uint256 margin, uint256 oi) = _pullFundsAndCommission(assetId, collateral, leverage);
@@ -493,7 +488,7 @@ contract BrokexCore {
 
     /// @notice Full collateral is pulled here; commission is deducted at execution.
     ///         Spread is NOT applied at order creation — it is applied by the keeper
-    ///         at execution time using the KMS proof supplied in batchExecute.
+    ///         at execution time using the TEE proof supplied in batchExecute.
     ///         targetPrice is a raw oracle price; the trigger comparison is also raw.
     function createLimitOrStopOrder(
         uint256 assetId,
@@ -588,11 +583,11 @@ contract BrokexCore {
     // =========================================================
 
     /// @notice Allowed even when paused so traders can always exit.
-    ///         The KMS proof supplies the spread for the exit leg.
+    ///         The TEE proof supplies the spread for the exit leg.
     function closePositionMarket(
         uint256 assetId,
         uint256 tradeId,
-        RiskProof calldata riskProof
+        TeeRiskProof calldata riskProof
     ) external nonReentrant {
         Trade storage t = trades[tradeId];
         if (t.trader != msg.sender) revert NotTrader();
@@ -603,7 +598,7 @@ contract BrokexCore {
         AssetConfig storage cfg = assets[assetId];
         if (!cfg.listed) revert BadParameter();
 
-        _verifyKmsProof(riskProof);
+        _verifyTeeProof(riskProof);
         _validateSpreadCap(riskProof.spreadLong, riskProof.spreadShort);
 
         uint256 oraclePrice = _getPrice(assetId);
@@ -645,14 +640,14 @@ contract BrokexCore {
     // Keeper — Batch Execute
     // =========================================================
 
-    /// @notice One RiskProof per entry.  The proof carries the spread for that execution leg.
+    /// @notice One TEE proof per entry. The proof carries the spread for that execution leg.
     ///
     ///         Trigger evaluation (limit/stop/SL/TP/LIQ) is performed against the RAW oracle
-    ///         price — no spread involved.  Spread is applied AFTER the trigger fires, purely
+    ///         price — no spread involved. Spread is applied AFTER the trigger fires, purely
     ///         to compute the execution price stored in openPrice / closePrice.
     ///
     ///         For pure-close triggers (SL/TP/LIQ) pass maxOILong = maxOIShort =
-    ///         type(uint256).max; the OI check will always pass.  Spread fields must still
+    ///         type(uint256).max; the OI check will always pass. Spread fields must still
     ///         be valid and within MAX_SPREAD_ALLOWED.
     ///
     /// @dev     Le prix de chaque trade est lu en direct on-chain via getPriceExternal(assetId) (FTSOv2).
@@ -661,7 +656,7 @@ contract BrokexCore {
     function batchExecute(
         uint256[] calldata tradeIds,
         uint8[]   calldata reasons,
-        RiskProof[] calldata riskProofs
+        TeeRiskProof[] calldata riskProofs
     ) external nonReentrant returns (
         uint256[] memory executedIds,
         uint256[] memory skippedIds
@@ -707,7 +702,7 @@ contract BrokexCore {
         uint256 tradeId,
         uint256 oraclePrice,
         uint8   reason,
-        RiskProof calldata rp
+        TeeRiskProof calldata rp
     ) internal returns (bool) {
         Trade storage t = trades[tradeId];
         if (t.assetId != rp.assetId) return false;
@@ -715,9 +710,9 @@ contract BrokexCore {
         AssetConfig storage cfg = assets[rp.assetId];
         if (!cfg.listed) return false;
 
-        // Validate KMS proof and hard spread cap for every execution path — no bypass.
+        // Validate TEE proof and hard spread cap for every execution path — no bypass.
         // Soft-fail so the keeper batch doesn't revert on a single bad proof.
-        if (!_checkKmsProof(rp)) return false;
+        if (!_checkTeeProof(rp)) return false;
         if (rp.spreadLong  > MAX_SPREAD_ALLOWED)               return false;
         if (rp.spreadShort > MAX_SPREAD_ALLOWED)               return false;
 
@@ -783,7 +778,7 @@ contract BrokexCore {
     // INTERNAL — Execute a pending limit/stop order
     // =========================================================
 
-    function _executeOrder(uint256 tradeId, uint256 oraclePrice, RiskProof calldata rp)
+    function _executeOrder(uint256 tradeId, uint256 oraclePrice, TeeRiskProof calldata rp)
         internal returns (bool)
     {
         Trade storage t    = trades[tradeId];
@@ -859,7 +854,7 @@ contract BrokexCore {
         uint256 tradeId,
         uint256 oraclePrice,
         uint8   reason,
-        RiskProof calldata rp
+        TeeRiskProof calldata rp
     ) internal {
         Trade storage t = trades[tradeId];
         if (t.state != STATE_OPEN) revert InvalidState();
@@ -936,7 +931,7 @@ contract BrokexCore {
     }
 
     // =========================================================
-    // INTERNAL — Verify KMS proof, update OI, lock delta (revert path)
+    // INTERNAL — Verify TEE proof, update OI, lock delta (revert path)
     // =========================================================
 
     /// @dev Used on the user-facing market open path — reverts on any failure.
@@ -944,7 +939,7 @@ contract BrokexCore {
         uint256    assetId,
         uint8      direction,
         uint256    oi,
-        RiskProof calldata rp
+        TeeRiskProof calldata rp
     ) internal {
         AssetConfig storage cfg = assets[assetId];
 
@@ -1126,11 +1121,11 @@ contract BrokexCore {
     }
 
     // =========================================================
-    // HELPERS — Spread (KMS-controlled, constant hard cap)
+    // HELPERS — Spread (TEE-controlled, constant hard cap)
     // =========================================================
 
     /// @dev Apply entry spread to the raw oracle price.
-    function _applyEntrySpread(uint256 oraclePrice, uint8 direction, RiskProof calldata rp)
+    function _applyEntrySpread(uint256 oraclePrice, uint8 direction, TeeRiskProof calldata rp)
         internal pure returns (uint256)
     {
         uint256 spread = direction == DIR_LONG ? rp.spreadLong : rp.spreadShort;
@@ -1238,17 +1233,17 @@ contract BrokexCore {
     }
 
     // =========================================================
-    // HELPERS — KMS proof verification (ECDSA)
+    // HELPERS — Flare Confidential Compute (FCC) TEE Proof Verification
     // =========================================================
 
-    function _verifyKmsProof(RiskProof calldata rp) internal view {
+    function _verifyTeeProof(TeeRiskProof calldata rp) internal view {
         AssetConfig storage cfg = assets[rp.assetId];
         if (!cfg.listed) revert BadParameter();
 
         if (rp.timestamp > block.timestamp) {
-            if (rp.timestamp - block.timestamp > 15)           revert InvalidKmsProof();
+            if (rp.timestamp - block.timestamp > 15)           revert InvalidTeeProof();
         } else {
-            if (block.timestamp - rp.timestamp > cfg.maxProofAge) revert KmsProofExpired();
+            if (block.timestamp - rp.timestamp > cfg.maxProofAge) revert TeeProofExpired();
         }
 
         bytes32 hash    = keccak256(abi.encode(
@@ -1260,10 +1255,10 @@ contract BrokexCore {
         address recovered = ecrecover(ethHash, v, r, s);
 
         // Verify cryptographic signature strictly against authorized TEE Enclave Signer key
-        if (recovered == address(0) || recovered != kmsSigner) revert InvalidKmsProof();
+        if (recovered == address(0) || recovered != teeEnclaveSigner) revert InvalidTeeProof();
     }
 
-    function _checkKmsProof(RiskProof calldata rp) internal view returns (bool) {
+    function _checkTeeProof(TeeRiskProof calldata rp) internal view returns (bool) {
         AssetConfig storage cfg = assets[rp.assetId];
         if (!cfg.listed) return false;
 
@@ -1282,11 +1277,11 @@ contract BrokexCore {
         (bytes32 r, bytes32 s, uint8 v) = _splitSig(rp.sig);
         address recovered = ecrecover(ethHash, v, r, s);
 
-        return recovered != address(0) && recovered == kmsSigner;
+        return recovered != address(0) && recovered == teeEnclaveSigner;
     }
 
     function _splitSig(bytes calldata sig) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
-        if (sig.length != 65) revert InvalidKmsProof();
+        if (sig.length != 65) revert InvalidTeeProof();
         assembly {
             r := calldataload(sig.offset)
             s := calldataload(add(sig.offset, 32))

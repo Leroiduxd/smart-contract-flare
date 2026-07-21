@@ -1,7 +1,7 @@
 const hre = require("hardhat");
 
 async function main() {
-  const CORE_ADDRESS = "0x2076A1e10A57ccDE1A85368e27E93CB5ce8F506B";
+  const CORE_ADDRESS = "0x96c719b0CAe583f768F7B8D41C59fF85401BF389";
   const [deployer] = await hre.ethers.getSigners();
   const core = await hre.ethers.getContractAt("contracts/v2/BrokexCore.sol:BrokexCore", CORE_ADDRESS, deployer);
 
