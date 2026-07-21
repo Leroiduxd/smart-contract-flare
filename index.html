@@ -485,6 +485,9 @@
                         <button class="btn btn-blue" id="btn-save-config" style="padding: 8px; font-size: 0.85rem;">
                             Appliquer les Adresses
                         </button>
+                        <button class="btn btn-green" id="btn-test-kms" style="margin-top: 8px; padding: 8px; font-size: 0.85rem;" onclick="testKmsApi()">
+                            <i class="fa-solid fa-microchip"></i> Tester l'API TEE / KMS
+                        </button>
                     </div>
                 </div>
             </div>
@@ -1252,6 +1255,37 @@
                 sig: sig
             };
         }
+
+        window.testKmsApi = async function() {
+            const btn = document.getElementById('btn-test-kms');
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fa-solid fa-spinner spinning"></i> Test TEE...`;
+
+            try {
+                const res = await fetch("http://localhost:8080/sign-proof", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        assetId: 5500,
+                        maxOILong: "500000000000",
+                        maxOIShort: "500000000000",
+                        spreadLong: 100,
+                        spreadShort: 100
+                    })
+                });
+                const data = await res.json();
+                if (data.success && data.proof && data.proof.sig) {
+                    alert(`✅ SUCCÈS - API TEE / KMS EN LIGNE ET OPÉRATIONNELLE !\n\n• Asset ID: ${data.proof.assetId}\n• Timestamp TEE: ${data.proof.timestamp}\n• Signer TEE: ${data.teeSigner}\n• Signature Enclave: ${data.proof.sig.slice(0, 26)}...\n\nLe microservice TEE répond parfaitement et est prêt à valider vos trades !`);
+                } else {
+                    alert(`❌ ERREUR API TEE : Réponse invalide.\n${JSON.stringify(data)}`);
+                }
+            } catch (err) {
+                alert(`❌ ERREUR CONNEXION API TEE : Impossible de joindre http://localhost:8080/sign-proof.\nVérifiez que le serveur TEE tourne localement.\n\nDétail: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fa-solid fa-microchip"></i> Tester l'API TEE / KMS`;
+            }
+        };
 
         async function openTrade() {
             if (!wallet) {

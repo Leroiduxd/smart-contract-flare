@@ -1,13 +1,13 @@
 const hre = require("hardhat");
 
 async function main() {
-  const CORE_ADDRESS = "0x2D2b93F52b4ae317FA11Ea36A21af23dC6Ff3eA8";
+  const CORE_ADDRESS = "0x7D8a8Dd4191Da885eF04C3C5e6eEE8EDBBf52300";
   const [deployer] = await hre.ethers.getSigners();
 
   const core = await hre.ethers.getContractAt("contracts/v2/BrokexCore.sol:BrokexCore", CORE_ADDRESS, deployer);
 
   // TEE Enclave Signer Key Address generated inside local TEE enclave memory
-  const teeSignerAddress = "0xFb8A8f2FDfEc07Ab74DE429aC041F70fC9B48c03";
+  const teeSignerAddress = "0xf8429f008bA010d7e75eF38176A3e35d11e0F835";
 
   console.log("=== LINKING TEE ENCLAVE SIGNER TO BROKEX CORE ===");
   console.log("Core Address     :", CORE_ADDRESS);
