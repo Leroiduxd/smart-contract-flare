@@ -1202,7 +1202,8 @@
         }
 
         // TEE Enclave KMS proof fetcher & signer
-        async function signKMSProof(assetId, maxOILong, maxOIShort, spreadLong, spreadShort, timestamp) {
+        async function getTEEProof(assetId, maxOILong, maxOIShort, spreadLong, spreadShort) {
+            const fallbackTimestamp = Math.floor(Date.now() / 1000);
             try {
                 // Call local TEE Enclave microservice
                 const res = await fetch("http://localhost:8080/sign-proof", {
@@ -1218,7 +1219,15 @@
                 });
                 const data = await res.json();
                 if (data.success && data.proof && data.proof.sig) {
-                    return data.proof.sig;
+                    return {
+                        assetId: data.proof.assetId,
+                        maxOILong: data.proof.maxOILong,
+                        maxOIShort: data.proof.maxOIShort,
+                        spreadLong: data.proof.spreadLong,
+                        spreadShort: data.proof.spreadShort,
+                        timestamp: data.proof.timestamp,
+                        sig: data.proof.sig
+                    };
                 }
             } catch (err) {
                 console.warn("TEE Local API offline, falling back to local enclave calculation:", err);
@@ -1229,10 +1238,19 @@
             const hash = ethers.keccak256(
                 abiCoder.encode(
                     ["uint256", "uint256", "uint256", "uint256", "uint256", "uint256"],
-                    [assetId, maxOILong, maxOIShort, spreadLong, spreadShort, timestamp]
+                    [assetId, maxOILong, maxOIShort, spreadLong, spreadShort, fallbackTimestamp]
                 )
             );
-            return await wallet.signMessage(ethers.getBytes(hash));
+            const sig = await wallet.signMessage(ethers.getBytes(hash));
+            return {
+                assetId: assetId,
+                maxOILong: maxOILong,
+                maxOIShort: maxOIShort,
+                spreadLong: spreadLong,
+                spreadShort: spreadShort,
+                timestamp: fallbackTimestamp,
+                sig: sig
+            };
         }
 
         async function openTrade() {
@@ -1257,24 +1275,13 @@
 
             try {
                 const collateralRaw = ethers.parseUnits(margin.toString(), 6);
-                const timestamp = Math.floor(Date.now() / 1000);
                 const maxOILong = ethers.parseUnits("500000", 6);
                 const maxOIShort = ethers.parseUnits("500000", 6);
                 const spreadLong = 100; // 0.01%
                 const spreadShort = 100;
 
-                // Sign locally simulating AWS KMS
-                const sig = await signKMSProof(assetId, maxOILong, maxOIShort, spreadLong, spreadShort, timestamp);
-
-                const riskProof = {
-                    assetId: assetId,
-                    maxOILong: maxOILong,
-                    maxOIShort: maxOIShort,
-                    spreadLong: spreadLong,
-                    spreadShort: spreadShort,
-                    timestamp: timestamp,
-                    sig: sig
-                };
+                // Get exact proof signed by TEE Enclave (including matching timestamp & sig)
+                const riskProof = await getTEEProof(assetId, maxOILong, maxOIShort, spreadLong, spreadShort);
 
                 const coreWithWallet = coreContract.connect(wallet);
                 const tx = await coreWithWallet.openMarketPosition(
@@ -1356,23 +1363,13 @@
             if (!confirm(`Voulez-vous vraiment fermer la position #${tradeId} ?`)) return;
 
             try {
-                const timestamp = Math.floor(Date.now() / 1000);
-                const maxOILong = ethers.MaxUint256;
-                const maxOIShort = ethers.MaxUint256;
+                const maxOILong = ethers.parseUnits("500000", 6);
+                const maxOIShort = ethers.parseUnits("500000", 6);
                 const spreadLong = 100;
                 const spreadShort = 100;
 
-                const sig = await signKMSProof(assetId, maxOILong, maxOIShort, spreadLong, spreadShort, timestamp);
-
-                const riskProof = {
-                    assetId: assetId,
-                    maxOILong: maxOILong,
-                    maxOIShort: maxOIShort,
-                    spreadLong: spreadLong,
-                    spreadShort: spreadShort,
-                    timestamp: timestamp,
-                    sig: sig
-                };
+                // Get exact proof signed by TEE Enclave (including matching timestamp & sig)
+                const riskProof = await getTEEProof(assetId, maxOILong, maxOIShort, spreadLong, spreadShort);
 
                 const coreWithWallet = coreContract.connect(wallet);
                 const tx = await coreWithWallet.closePositionMarket(assetId, tradeId, riskProof);
