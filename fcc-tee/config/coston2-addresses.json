@@ -1,0 +1,10 @@
+{
+  "network": "coston2",
+  "chainId": 114,
+  "rpcUrl": "https://coston2-api.flare.network/ext/bc/C/rpc",
+  "contracts": {
+    "FlareContractRegistry": "0xaD6742A35fB274898263335F1D82cd6989cd4EDD",
+    "TeeExtensionRegistry": "0x44A446BF66Af52a4235b5b4AF4D7BDB92Dd749fd",
+    "TeeMachineRegistry": "0xCeCb92824dc00b2178a4b8E33acEAB1e80dbE40B"
+  }
+}

@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  extension-tee:
+    build: ./extension-tee
+    container_name: brokex-fcc-extension-tee
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - ENCLAVE_MASTER_KEY=${PRIVATE_KEY}
+
+  ext-proxy:
+    image: ghcr.io/flare-foundation/fce-proxy:latest
+    container_name: brokex-fcc-ext-proxy
+    restart: always
+    ports:
+      - "6674:6674"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - EXTENSION_URL=http://extension-tee:8000
+      - CHAIN_RPC=https://coston2-api.flare.network/ext/bc/C/rpc
+      - EXTENSION_ID=${EXTENSION_ID:-65536}
+      - TUNNEL_URL=${TUNNEL_URL}
+    depends_on:
+      - extension-tee
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: brokex-fcc-redis
+    restart: always
+    ports:
+      - "6379:6379"

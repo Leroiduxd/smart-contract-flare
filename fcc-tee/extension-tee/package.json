@@ -1,0 +1,14 @@
+{
+  "name": "brokex-fcc-extension-tee",
+  "version": "1.0.0",
+  "description": "Official Flare Confidential Compute (FCC) TEE Extension Handler",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "ethers": "^6.11.1"
+  }
+}
