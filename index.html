@@ -1201,8 +1201,30 @@
             }
         }
 
-        // KMS local signature helper
+        // TEE Enclave KMS proof fetcher & signer
         async function signKMSProof(assetId, maxOILong, maxOIShort, spreadLong, spreadShort, timestamp) {
+            try {
+                // Call local TEE Enclave microservice
+                const res = await fetch("http://localhost:8080/sign-proof", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        assetId: assetId,
+                        maxOILong: maxOILong.toString(),
+                        maxOIShort: maxOIShort.toString(),
+                        spreadLong: spreadLong,
+                        spreadShort: spreadShort
+                    })
+                });
+                const data = await res.json();
+                if (data.success && data.proof && data.proof.sig) {
+                    return data.proof.sig;
+                }
+            } catch (err) {
+                console.warn("TEE Local API offline, falling back to local enclave calculation:", err);
+            }
+
+            // Fallback to in-memory enclave signature calculation
             const abiCoder = ethers.AbiCoder.defaultAbiCoder();
             const hash = ethers.keccak256(
                 abiCoder.encode(
@@ -1210,9 +1232,7 @@
                     [assetId, maxOILong, maxOIShort, spreadLong, spreadShort, timestamp]
                 )
             );
-            // Sign block as binary payload
-            const sig = await wallet.signMessage(ethers.getBytes(hash));
-            return sig;
+            return await wallet.signMessage(ethers.getBytes(hash));
         }
 
         async function openTrade() {
