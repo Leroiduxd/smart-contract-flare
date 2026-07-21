@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  tee-signer:
+    build: .
+    container_name: brokex-tee-signer
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - KMS_PRIVATE_KEY=${PRIVATE_KEY}
