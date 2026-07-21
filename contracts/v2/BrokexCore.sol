@@ -1259,20 +1259,8 @@ contract BrokexCore {
         (bytes32 r, bytes32 s, uint8 v) = _splitSig(rp.sig);
         address recovered = ecrecover(ethHash, v, r, s);
 
-        if (recovered == address(0)) revert InvalidKmsProof();
-
-        // Actively verify recovered signer against official Flare TEE Machine Registry on-chain
-        if (address(teeMachineRegistry) != address(0) && teeExtensionId != 0) {
-            bool isRegistered = false;
-            try teeMachineRegistry.isTeeRegistered(teeExtensionId, recovered) returns (bool res) {
-                isRegistered = res;
-            } catch {
-                isRegistered = (recovered == kmsSigner);
-            }
-            if (!isRegistered && recovered != kmsSigner) revert InvalidKmsProof();
-        } else {
-            if (recovered != kmsSigner) revert InvalidKmsProof();
-        }
+        // Verify cryptographic signature strictly against authorized TEE Enclave Signer key
+        if (recovered == address(0) || recovered != kmsSigner) revert InvalidKmsProof();
     }
 
     function _checkKmsProof(RiskProof calldata rp) internal view returns (bool) {
